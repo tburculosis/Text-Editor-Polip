@@ -1,6 +1,9 @@
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _GNU_SOURCE
+
 #include <asm-generic/errno-base.h>
 #include <asm-generic/ioctls.h>
-#include <ctype.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <stdio.h>
@@ -18,11 +21,19 @@
 
 
 //***global data***//
+
+typedef struct erow { //editor row 
+    int size;
+    char *chars;
+} erow;
+
 struct editorConfig {  
     int cx; //cursor position x
     int cy; //cursor position y
     int term_rows;
     int term_cols;
+    int numrows;
+    erow row;
     struct termios orig_termios;
 };
 
@@ -161,6 +172,32 @@ int getWindowSize(int *rows, int *cols) {
         return 0;
     }
 }
+
+//***file i/o operations***//
+
+void editorOpen(char *filename) {
+    FILE *fp = fopen(filename, "r");
+    if (!fp) die("fopen returned NULL");
+
+    char *line = NULL;
+    size_t lineCapacity = 0;
+    ssize_t lineLen;
+    lineLen = getline(&line, &lineCapacity, fp);
+    if (lineLen != -1) {
+        while (lineLen > 0 && (line[lineLen - 1] == '\n' || line[lineLen - 1] == '\r'))
+            lineLen--;
+    
+        E.row.size = lineLen;
+        E.row.chars = malloc(lineLen + 1);
+        memcpy(E.row.chars, line, lineLen);
+        E.row.chars[lineLen] = '\0';
+        E.numrows = 1;
+    }
+    
+    free(line);
+    fclose(fp);
+}
+
 /////////////////////////
 
 //***append buffer***//
@@ -253,26 +290,32 @@ void editorProcessKeypress() {
 void editorDrawRows(struct append_buff *ab) {
     int y; 
     for (y = 0; y < E.term_rows; y++) {
-
-        if (y == E.term_rows / 3) {
-            //weclome text
-            char welcome[80];
-            int welcomeLen = snprintf(
-                welcome,
-                sizeof(welcome),
-                "Polip Text Editor --version %s", 
-                POLIP_VERSION);
-            if (welcomeLen > E.term_cols) welcomeLen = E.term_cols;
-            //centre welcome text
-            int padding = (E.term_cols - welcomeLen) / 2;
-            if (padding) {
+        if (y >= E.numrows) {  
+            if (E.numrows == 0 && y == E.term_rows / 3) {
+                //weclome text
+                char welcome[80];
+                int welcomeLen = snprintf(
+                    welcome,
+                    sizeof(welcome),
+                    "Polip Text Editor --version %s", 
+                    POLIP_VERSION);
+                if (welcomeLen > E.term_cols) welcomeLen = E.term_cols;
+                //centre welcome text
+                int padding = (E.term_cols - welcomeLen) / 2;
+                if (padding) {
+                    abAppend(ab, "<>", 2);
+                    padding--;
+                }
+                while(padding--) abAppend(ab, " ", 1);
+                abAppend(ab, welcome, welcomeLen);
+            } else {
                 abAppend(ab, "<>", 2);
-                padding--;
             }
-            while(padding--) abAppend(ab, " ", 1);
-            abAppend(ab, welcome, welcomeLen);
         } else {
-            abAppend(ab, "<>", 2);
+            int len = E.row.size;
+            if (len > E.term_cols) len = E.term_cols;
+            abAppend(ab, "<> ", 3);
+            abAppend(ab, E.row.chars, len);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -309,6 +352,8 @@ void editorRefreshScreen() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.numrows = 0;
+
     if (getWindowSize(&E.term_rows, &E.term_cols) == -1)
         die("getWindowSize(int *rows, int *cols) from initEditor()");
 }
@@ -321,9 +366,12 @@ void initEditor() {
 
 
 //***entering program***//
-int main() {
+int main(int argc, char *argv[]) {
     enableRawMode();
     initEditor();
+    if (argc >= 2) {
+        editorOpen(argv[1]);
+    }
 
     while(1) {
         editorRefreshScreen();
