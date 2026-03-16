@@ -30,10 +30,12 @@ typedef struct erow { //editor row
 struct editorConfig {  
     int cx; //cursor position x
     int cy; //cursor position y
+    int rowOffset; //for horizontal scrolling
+    int colOffset; //for vertical scrolling
     int term_rows;
     int term_cols;
     int numrows;
-    erow row;
+    erow *row;
     struct termios orig_termios;
 };
 
@@ -52,8 +54,6 @@ enum editorKeys {
 };
 
 /////////////////////
-
-
 
 
 
@@ -139,6 +139,7 @@ int editorReadKey() { //type coersion?
         return read_buff;
     }
 }
+
 int getCursorPosition(int *rows, int *cols) {
     char buff[32];
     unsigned int i = 0;
@@ -157,7 +158,6 @@ int getCursorPosition(int *rows, int *cols) {
     if (sscanf(&buff[2], "%d;%d", rows, cols) != 2) return -1;
 
     return 0;
-
 }
 
 int getWindowSize(int *rows, int *cols) {
@@ -173,6 +173,20 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+
+//***row operations***//
+
+void editorAppendRow(char *s, size_t len) {
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows++;
+}
+
 //***file i/o operations***//
 
 void editorOpen(char *filename) {
@@ -182,16 +196,11 @@ void editorOpen(char *filename) {
     char *line = NULL;
     size_t lineCapacity = 0;
     ssize_t lineLen;
-    lineLen = getline(&line, &lineCapacity, fp);
-    if (lineLen != -1) {
+    while ((lineLen = getline(&line, &lineCapacity, fp)) != -1) {
         while (lineLen > 0 && (line[lineLen - 1] == '\n' || line[lineLen - 1] == '\r'))
             lineLen--;
     
-        E.row.size = lineLen;
-        E.row.chars = malloc(lineLen + 1);
-        memcpy(E.row.chars, line, lineLen);
-        E.row.chars[lineLen] = '\0';
-        E.numrows = 1;
+      editorAppendRow(line, lineLen); 
     }
     
     free(line);
@@ -229,23 +238,32 @@ void abFree(struct append_buff *ab) {
 
 //***input***//
 void editorMoveCursor(int key) {
+    erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+
     switch (key) {
         case ARROW_LEFT:
             if (E.cx != 0)
               { E.cx--; }  
             break;
         case ARROW_RIGHT:
-            if (E.cx != E.term_cols - 1)
-            { E.cx++; }
+            if (row && E.cx < row->size) {
+                E.cx++; 
+            }
             break;
         case ARROW_UP:
             if (E.cy != 0)
             { E.cy--; }
             break;
         case ARROW_DOWN:
-            if (E.cy != E.term_rows - 1)
+            if (E.cy < E.numrows)
             { E.cy++; }
             break;
+    }
+
+    row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+    int rowLen = row ? row->size : 0;
+    if (E.cx > rowLen) {
+        E.cx = rowLen;
     }
 }
 
@@ -287,10 +305,30 @@ void editorProcessKeypress() {
 
 
 //***output***//
+
+void editorScroll() {
+    if (E.cy < E.rowOffset) {
+        E.rowOffset = E.cy;
+    }
+
+    if (E.cy >= E.rowOffset + E.term_rows) {
+        E.rowOffset = E.cy - E.term_rows + 1;
+    }
+
+    if (E.cx < E.colOffset) {
+        E.colOffset = E.cx;
+    }
+
+    if (E.cx >= E.colOffset + E.term_cols) {
+        E.colOffset = E.cx - E.term_cols + 1;
+    }
+}
+
 void editorDrawRows(struct append_buff *ab) {
     int y; 
     for (y = 0; y < E.term_rows; y++) {
-        if (y >= E.numrows) {  
+        int fileRow = y + E.rowOffset;
+        if (fileRow >= E.numrows) {  
             if (E.numrows == 0 && y == E.term_rows / 3) {
                 //weclome text
                 char welcome[80];
@@ -312,10 +350,11 @@ void editorDrawRows(struct append_buff *ab) {
                 abAppend(ab, "<>", 2);
             }
         } else {
-            int len = E.row.size;
+            int len = E.row[fileRow].size - E.colOffset;
+            if (len < 0) len = 0;
             if (len > E.term_cols) len = E.term_cols;
             abAppend(ab, "<> ", 3);
-            abAppend(ab, E.row.chars, len);
+            abAppend(ab, &E.row[fileRow].chars[E.colOffset], len);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -326,6 +365,8 @@ void editorDrawRows(struct append_buff *ab) {
 }
 
 void editorRefreshScreen() {
+    editorScroll();
+
     struct append_buff ab = APPEND_BUFF_INIT; //no contructors in C, using preprocessor definitions instead
 
     abAppend(&ab, "\x1b[?25l", 6);
@@ -335,7 +376,7 @@ void editorRefreshScreen() {
     editorDrawRows(&ab);
 
     char buff[32];
-    snprintf(buff, sizeof(buff), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buff, sizeof(buff), "\x1b[%d;%dH", (E.cy - E.rowOffset) + 1, (E.cx - E.colOffset) + 1);
     abAppend(&ab, buff, strlen(buff));
 
     abAppend(&ab, "\x1b[?25h", 6);
@@ -352,7 +393,10 @@ void editorRefreshScreen() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.rowOffset = 0;
+    E.colOffset = 0;
     E.numrows = 0;
+    E.row = NULL;
 
     if (getWindowSize(&E.term_rows, &E.term_cols) == -1)
         die("getWindowSize(int *rows, int *cols) from initEditor()");
