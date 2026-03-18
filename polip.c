@@ -33,6 +33,7 @@ typedef struct erow { //editor row
 struct editorConfig {  
     int cx; //cursor position x
     int cy; //cursor position y
+    int rx; //cursor position on rendered text 
     int rowOffset; //for horizontal scrolling
     int colOffset; //for vertical scrolling
     int term_rows;
@@ -178,6 +179,18 @@ int getWindowSize(int *rows, int *cols) {
 
 
 //***row operations***//
+int editorRowCxtoRx(erow *row, int cx) {
+    int rx = 0;
+    int j;
+    for (j = 0; j < cx; j++) {
+        if (row->chars[j] == '\t') {
+            rx += (TAB_LENGTH -1) - (rx % TAB_LENGTH);
+        }
+        rx++;
+    }
+
+    return rx;
+}
 
 void editorUpdateRow(erow *row) {
     int tabs = 0;
@@ -320,12 +333,21 @@ void editorProcessKeypress() {
             E.cx = 0;
             break;
         case END_KEY:
-            E.cx = E.term_cols - 1;
+            if (E.cy < E.numrows) {
+                E.cx = E.row[E.cy].size;
+            } 
             break;
 
         case PAGE_UP:
         case PAGE_DOWN:
             {
+                if (kpress == PAGE_UP) {
+                    E.cy = E.rowOffset;
+                } else if (kpress == PAGE_DOWN) {
+                    E.cy = E.rowOffset + E.term_rows - 1;
+                    if (E.cy > E.numrows) E.cy = E.numrows;
+                }
+
                 int times = E.term_rows;
                 while (times--) {
                     editorMoveCursor(kpress == PAGE_UP ? ARROW_UP : ARROW_DOWN);
@@ -346,6 +368,11 @@ void editorProcessKeypress() {
 //***output***//
 
 void editorScroll() {
+    E.rx = 0;
+    if (E.cy < E.numrows) {
+        E.rx = editorRowCxtoRx(&E.row[E.cy], E.cx);
+    }
+
     if (E.cy < E.rowOffset) {
         E.rowOffset = E.cy;
     }
@@ -354,12 +381,12 @@ void editorScroll() {
         E.rowOffset = E.cy - E.term_rows + 1;
     }
 
-    if (E.cx < E.colOffset) {
-        E.colOffset = E.cx;
+    if (E.rx < E.colOffset) {
+        E.colOffset = E.rx;
     }
 
-    if (E.cx >= E.colOffset + E.term_cols) {
-        E.colOffset = E.cx - E.term_cols + 1;
+    if (E.rx >= E.colOffset + E.term_cols) {
+        E.colOffset = E.rx - E.term_cols + 1;
     }
 }
 
@@ -415,7 +442,7 @@ void editorRefreshScreen() {
     editorDrawRows(&ab);
 
     char buff[32];
-    snprintf(buff, sizeof(buff), "\x1b[%d;%dH", (E.cy - E.rowOffset) + 1, (E.cx - E.colOffset) + 1);
+    snprintf(buff, sizeof(buff), "\x1b[%d;%dH", (E.cy - E.rowOffset) + 1, (E.rx - E.colOffset) + 1);
     abAppend(&ab, buff, strlen(buff));
 
     abAppend(&ab, "\x1b[?25h", 6);
@@ -432,6 +459,7 @@ void editorRefreshScreen() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.rx = 0;
     E.rowOffset = 0;
     E.colOffset = 0;
     E.numrows = 0;
