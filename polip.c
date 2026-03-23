@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <time.h>
+#include <stdarg.h>
 
 //***defines***//
 #define POLIP_VERSION "0.0.1"
@@ -41,6 +43,8 @@ struct editorConfig {
     int numrows;
     erow *row;
     char *filename;
+    char statusmsg[20];
+    time_t statusmsg_time;
     struct termios orig_termios;
 };
 
@@ -451,6 +455,16 @@ void editorDrawStatusBar(struct append_buff *ab) {
     }
 
     abAppend(ab, "\x1b[m", 3);
+    abAppend(ab, "\r\n", 2);
+}
+
+void editorDrawMessageBar(struct append_buff *ab) {
+    abAppend(ab, "\x1b[K", 3);
+    int msglen = strlen(E.statusmsg);
+    if (msglen > E.term_cols) msglen = E.term_cols;
+    if (msglen && time(NULL) - E.statusmsg_time < 5) {
+        abAppend(ab, E.statusmsg, msglen);
+    }
 }
 
 void editorRefreshScreen() {
@@ -464,6 +478,7 @@ void editorRefreshScreen() {
 
     editorDrawRows(&ab);
     editorDrawStatusBar(&ab);
+    editorDrawMessageBar(&ab);
 
     char buff[32];
     snprintf(buff, sizeof(buff), "\x1b[%d;%dH", (E.cy - E.rowOffset) + 1, (E.rx - E.colOffset) + 1);
@@ -474,6 +489,14 @@ void editorRefreshScreen() {
     //write the buffer
     write(STDOUT_FILENO, ab.b, ab.len);
     abFree(&ab);
+}
+
+void editorSetStatusMessage(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+    va_end(ap);
+    E.statusmsg_time = time(NULL);
 }
 ////////////////////
 
@@ -489,10 +512,12 @@ void initEditor() {
     E.numrows = 0;
     E.row = NULL;
     E.filename = NULL;
+    E.statusmsg[0] = '\0';
+    E.statusmsg_time = 0;
 
     if (getWindowSize(&E.term_rows, &E.term_cols) == -1)
         die("getWindowSize(int *rows, int *cols) from initEditor()");
-    E.term_rows -= 1;
+    E.term_rows -= 2;
 }
 //////////////
 
@@ -509,6 +534,8 @@ int main(int argc, char *argv[]) {
     if (argc >= 2) {
         editorOpen(argv[1]);
     }
+
+    editorSetStatusMessage("HELP: Ctrl-Q to exit");
 
     while(1) {
         editorRefreshScreen();
