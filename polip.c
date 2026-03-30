@@ -19,6 +19,7 @@
 #define POLIP_VERSION "0.0.1"
 #define TAB_LENGTH 8
 #define CRTL_KEY(k) ((k) & 0x1f)
+#define KILO_QUIT_TIMES 3 
 /////////////////
 
 //***forward declarations***// 
@@ -398,6 +399,8 @@ void editorMoveCursor(int key) {
 }
 
 void editorProcessKeypress() {
+    static int quit_times = KILO_QUIT_TIMES; 
+
     int kpress = editorReadKey();
 
     switch (kpress) {
@@ -406,6 +409,12 @@ void editorProcessKeypress() {
             break;
 
         case CRTL_KEY('q'):
+            if (E.dirty && quit_times > 0) {
+                editorSetStatusMessage("WARNING! File has unsaved changes."
+                    "Press Ctrl-Q %d more times to quit", quit_times);
+                quit_times--;
+                return;
+            }
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
@@ -462,6 +471,8 @@ void editorProcessKeypress() {
             editorInsertChar(kpress);
             break;
     }
+
+    quit_times = KILO_QUIT_TIMES;
 }
 
 
