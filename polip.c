@@ -1,8 +1,9 @@
-#include <stddef.h>
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
 #define _GNU_SOURCE
 
+#include <ctype.h>
+#include <stddef.h>
 #include <asm-generic/errno-base.h>
 #include <asm-generic/ioctls.h>
 #include <string.h>
@@ -20,12 +21,14 @@
 #define POLIP_VERSION "0.0.1"
 #define TAB_LENGTH 8
 #define CRTL_KEY(k) ((k) & 0x1f)
-#define KILO_QUIT_TIMES 3 
+#define KILO_QUIT_TIMES 3
+
 /////////////////
 
 //***forward declarations***// 
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
+char *editorPrompt(char *prompt);
 //***global data***//
 
 typedef struct erow { //editor row 
@@ -374,7 +377,13 @@ void editorOpen(char *filename) {
 
 
 void editorSave() {
-    if (E.filename == NULL)  return;
+    if (E.filename == NULL) {
+        E.filename = editorPrompt("Save as: %s (ESC to cancel)");
+        if (E.filename == NULL) {
+            editorSetStatusMessage("Save aborted");
+            return;
+        }
+    }
 
     int len;
     char *buff = editorRowsToString(&len);
@@ -426,7 +435,39 @@ void abFree(struct append_buff *ab) {
 ///////////////////////
 
 //***input***//
+char *editorPrompt(char *prompt) {
+    size_t buff_size = 128;
+    char *buff = malloc(buff_size);
 
+    size_t buff_len = 0;
+    buff[0] = '\0';
+
+    while (1) {
+        editorSetStatusMessage(prompt, buff);
+        editorRefreshScreen();
+
+        int c = editorReadKey();
+        if (c == DEL_KEY || c == CRTL_KEY('h') || c == BACKSPACE) {
+            if (buff_len != 0) buff[--buff_len] = '\0';
+        } else if (c == '\x1b') {
+            editorSetStatusMessage("");
+            free(buff);
+            return NULL;
+        } else if (c == '\r') {
+            if (buff_len != 0) {
+                editorSetStatusMessage("");
+                return buff;
+            }
+        } else if (!iscntrl(c) && c < 128) {
+            if (buff_len == buff_size - 1) {
+                buff_size *= 2;
+                buff = realloc(buff, buff_size);
+            }
+            buff[buff_len++] = c;
+            buff[buff_len] = '\0';
+        }
+    }
+}
 
 void editorMoveCursor(int key) {
     erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
