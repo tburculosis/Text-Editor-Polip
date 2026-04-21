@@ -36,6 +36,7 @@ typedef struct erow { //editor row
     int rsize;
     char *chars;
     char *render;
+    unsigned char *hl;
 } erow;
 
 struct editorConfig {  
@@ -68,6 +69,12 @@ enum editorKeys {
     END_KEY,
     PAGE_UP,
     PAGE_DOWN,
+};
+
+enum eidtorHighligh {
+    HL_NORMAL = 0,
+    HL_NUMBER,
+    HL_MATCH,
 };
 
 /////////////////////
@@ -190,6 +197,29 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+//***syntax highlighting***//
+
+void editorUpdateSyntax(erow *row) {
+    row->hl = realloc(row->hl, row->rsize);
+    memset(row->hl, HL_NORMAL, row->rsize);
+
+    int i;
+    for (i = 0; i < row->rsize; i++) {
+        if (isdigit(row->render[i])) {
+            row->hl[i] = HL_NUMBER;
+        }
+    }
+}
+
+int editorSyntaxToColour(int hl) {
+    switch (hl) {
+        case HL_NORMAL: 
+            return 31;
+        case HL_MATCH:
+            return 34;
+        default: return 37;
+    }
+}
 
 //***row operations***//
 int editorRowCxtoRx(erow *row, int cx) {
@@ -242,6 +272,8 @@ void editorUpdateRow(erow *row) {
 
     row->render[idx] = '\0';
     row->rsize = idx;
+
+    editorUpdateSyntax(row);
 }
 
 void editorInsertRow(int at, char *s, size_t len) {
@@ -257,6 +289,7 @@ void editorInsertRow(int at, char *s, size_t len) {
     
     E.row[at].rsize = 0;
     E.row[at].render = NULL;
+    E.row[at].hl = NULL;
     editorUpdateRow(&E.row[at]);
 
     E.numrows++;
@@ -266,6 +299,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 void editorFreeRow(erow *row) {
     free(row->render);
     free(row->chars);
+    free(row->hl);
 }
 
 void editorDelRow(int at) {
@@ -453,6 +487,8 @@ void editorFindCallback(char *query, int key) {
             E.cy = current;
             E.cx = editorRowRxToCx(row, match - row->render);
             E.rowOffset = E.numrows;
+
+            memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
             break;
         }
     }    
@@ -716,20 +752,33 @@ void editorDrawRows(struct append_buff *ab) {
                 abAppend(ab, "<>", 2);
             }
         } else {
+            abAppend(ab, "<>", 2);
             int len = E.row[fileRow].rsize - E.colOffset;
             if (len < 0) len = 0;
             if (len > E.term_cols) len = E.term_cols;
             char *c = &E.row[fileRow].render[E.colOffset];
+            unsigned char *hl = &E.row[fileRow].hl[E.colOffset];
+            int current_colour = -1;
             int j;
             for (j = 0; j < len; j++) {
-                    if (isdigit(c[j])) {
-                    abAppend(ab, "\x1b[31m", 5);
+                if (hl[j] == HL_NORMAL) {
+                    if (current_colour != -1) {
+                        abAppend(ab, "\x1b[39m", 5);
+                        current_colour = -1;
+                    }
                     abAppend(ab, &c[j], 1);
-                    abAppend(ab, "\x1b[39m", 5);
                 } else {
+                    int colour = editorSyntaxToColour(hl[j]);
+                    if (colour != current_colour) {
+                        current_colour = colour;
+                        char buff[16];
+                        int clen = snprintf(buff, sizeof(buff), "\x1b[%dm", colour);
+                        abAppend(ab, buff, clen);
+                    }
                     abAppend(ab, &c[j], 1);
                 }
             }
+            abAppend(ab, "\x1b[39m", 5);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -782,7 +831,7 @@ void editorRefreshScreen() {
     editorDrawMessageBar(&ab);
 
     char buff[32];
-    snprintf(buff, sizeof(buff), "\x1b[%d;%dH", (E.cy - E.rowOffset) + 1, (E.rx - E.colOffset) + 4);
+    snprintf(buff, sizeof(buff), "\x1b[%d;%dH", (E.cy - E.rowOffset) + 1, (E.rx - E.colOffset) + 3);
     abAppend(&ab, buff, strlen(buff));
 
     abAppend(&ab, "\x1b[?25h", 6);
